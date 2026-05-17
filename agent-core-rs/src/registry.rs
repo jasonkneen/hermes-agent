@@ -41,3 +41,50 @@ impl Registry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+    use serde_json::json;
+
+    fn mk_spec(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.into(),
+            description: "test".into(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_tool_returns_error() {
+        let r = Registry::new();
+        let (out, err) = r.dispatch("nope", json!({})).await;
+        assert!(err);
+        assert!(out.contains("unknown tool"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_ok_returns_handler_output() {
+        let mut r = Registry::new();
+        r.register(
+            mk_spec("echo"),
+            Arc::new(|args: Value| Box::pin(async move { Ok(args["x"].as_str().unwrap_or("").to_string()) })),
+        );
+        let (out, err) = r.dispatch("echo", json!({"x": "hi"})).await;
+        assert!(!err);
+        assert_eq!(out, "hi");
+    }
+
+    #[tokio::test]
+    async fn dispatch_handler_error_is_wrapped() {
+        let mut r = Registry::new();
+        r.register(
+            mk_spec("boom"),
+            Arc::new(|_| Box::pin(async move { Err(anyhow!("kaboom")) })),
+        );
+        let (out, err) = r.dispatch("boom", json!({})).await;
+        assert!(err);
+        assert!(out.contains("kaboom"));
+    }
+}

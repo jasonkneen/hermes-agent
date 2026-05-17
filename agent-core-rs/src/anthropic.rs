@@ -1,21 +1,25 @@
 use anyhow::{anyhow, Context, Result};
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::provider::StreamCb;
 use crate::types::{AssistantTurn, Block, Message, ToolSpec};
 
+pub struct AnthropicConfig<'a> {
+    pub api_key: &'a str,
+    pub base_url: &'a str,
+    pub model: &'a str,
+    pub max_tokens: u32,
+}
+
 pub async fn call(
-    api_key: &str,
-    base_url: &str,
-    model: &str,
-    max_tokens: u32,
+    cfg: AnthropicConfig<'_>,
     system: &str,
     messages: &[Message],
     tools: &[ToolSpec],
-    mut on_delta: StreamCb,
+    on_delta: StreamCb,
 ) -> Result<AssistantTurn> {
-    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
     let api_messages: Vec<Value> = messages
         .iter()
         .map(|m| match m {
@@ -25,8 +29,8 @@ pub async fn call(
         .collect();
 
     let mut body = json!({
-        "model": model,
-        "max_tokens": max_tokens,
+        "model": cfg.model,
+        "max_tokens": cfg.max_tokens,
         "messages": api_messages,
         "stream": true,
     });
@@ -46,7 +50,7 @@ pub async fn call(
 
     let resp = reqwest::Client::new()
         .post(&url)
-        .header("x-api-key", api_key)
+        .header("x-api-key", cfg.api_key)
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
         .json(&body)
@@ -60,6 +64,13 @@ pub async fn call(
         return Err(anyhow!("anthropic HTTP {status}: {text}"));
     }
 
+    parse_stream(resp.bytes_stream().map(|r| r.map_err(anyhow::Error::from)), on_delta).await
+}
+
+pub async fn parse_stream<S>(mut stream: S, mut on_delta: StreamCb) -> Result<AssistantTurn>
+where
+    S: Stream<Item = Result<bytes::Bytes>> + Unpin,
+{
     let mut blocks: Vec<Block> = Vec::new();
     let mut tool_buf: Vec<String> = Vec::new();
     let mut text_buf: Vec<String> = Vec::new();
@@ -69,7 +80,6 @@ pub async fn call(
     let mut tool_names: Vec<String> = Vec::new();
     let mut stop_reason = String::new();
 
-    let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("anthropic stream error")?;
@@ -90,7 +100,7 @@ pub async fn call(
                     "content_block_start" => {
                         let blk = &v["content_block"];
                         let ty = blk["type"].as_str().unwrap_or("").to_string();
-                        block_types.push(ty.clone());
+                        block_types.push(ty);
                         tool_buf.push(String::new());
                         text_buf.push(String::new());
                         think_buf.push(String::new());
@@ -149,4 +159,61 @@ pub async fn call(
     }
 
     Ok(AssistantTurn { blocks, stop_reason })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::stream;
+
+    fn run_parse(chunks: Vec<&'static [u8]>) -> AssistantTurn {
+        let s = stream::iter(chunks.into_iter().map(|c| Ok(bytes::Bytes::from_static(c))));
+        let cb: StreamCb = Box::new(|_: &str| {});
+        tokio::runtime::Runtime::new().unwrap().block_on(parse_stream(s, cb)).unwrap()
+    }
+
+    #[test]
+    fn parses_text_and_tool_use() {
+        let chunks: Vec<&'static [u8]> = vec![
+            b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n",
+            b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n",
+            b"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            b"data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"bash\",\"input\":{}}}\n\n",
+            b"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\"}}\n\n",
+            b"data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"ls\\\"}\"}}\n\n",
+            b"data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n",
+        ];
+        let turn = run_parse(chunks);
+        assert_eq!(turn.stop_reason, "tool_use");
+        assert_eq!(turn.blocks.len(), 2);
+        match &turn.blocks[0] {
+            Block::Text { text } => assert_eq!(text, "Hello world"),
+            _ => panic!("expected text"),
+        }
+        match &turn.blocks[1] {
+            Block::ToolUse { id, name, input } => {
+                assert_eq!(id, "tu_1");
+                assert_eq!(name, "bash");
+                assert_eq!(input["command"], "ls");
+            }
+            _ => panic!("expected tool_use"),
+        }
+    }
+
+    #[test]
+    fn parses_split_event_boundaries() {
+        let chunks: Vec<&'static [u8]> = vec![
+            b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+            b"\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",",
+            b"\"text\":\"chunked\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        ];
+        let turn = run_parse(chunks);
+        assert_eq!(turn.blocks.len(), 1);
+        match &turn.blocks[0] {
+            Block::Text { text } => assert_eq!(text, "chunked"),
+            _ => panic!("expected text"),
+        }
+    }
 }

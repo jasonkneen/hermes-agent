@@ -20,7 +20,18 @@ impl Provider {
     ) -> BoxFuture<'a, Result<AssistantTurn>> {
         match self {
             Provider::Anthropic { api_key, base_url, model, max_tokens } => Box::pin(
-                crate::anthropic::call(api_key, base_url, model, *max_tokens, system, messages, tools, on_delta),
+                crate::anthropic::call(
+                    crate::anthropic::AnthropicConfig {
+                        api_key,
+                        base_url,
+                        model,
+                        max_tokens: *max_tokens,
+                    },
+                    system,
+                    messages,
+                    tools,
+                    on_delta,
+                ),
             ),
             Provider::OpenAI { api_key, base_url, model } => Box::pin(
                 crate::openai::call(api_key, base_url, model, system, messages, tools, on_delta),

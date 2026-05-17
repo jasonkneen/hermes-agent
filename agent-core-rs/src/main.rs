@@ -1,18 +1,10 @@
-mod agent;
-mod anthropic;
-mod openai;
-mod provider;
-mod registry;
-mod session;
-mod tools;
-mod types;
-
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
 
-use crate::provider::Provider;
-use crate::registry::Registry;
-use crate::tools::todo::TodoStore;
+use hermes_core::provider::Provider;
+use hermes_core::registry::Registry;
+use hermes_core::tools::todo::TodoStore;
+use hermes_core::{agent, session, tools};
 
 const HELP: &str = r#"hermes-core — minimal headless agent
 

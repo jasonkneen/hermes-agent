@@ -96,3 +96,58 @@ pub fn edit_handler() -> Handler {
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tmp_path(suffix: &str) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir()
+            .join(format!("hermes-core-files-{n}-{suffix}"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[tokio::test]
+    async fn write_then_read_then_edit() {
+        let path = tmp_path("a");
+        let w = write_handler();
+        let r = read_handler();
+        let e = edit_handler();
+
+        w(json!({"path": path, "content": "alpha\nbeta\ngamma\n"})).await.unwrap();
+        let body = r(json!({"path": path})).await.unwrap();
+        assert_eq!(body, "alpha\nbeta\ngamma\n");
+
+        e(json!({"path": path, "old_string": "beta", "new_string": "BETA"})).await.unwrap();
+        let body = r(json!({"path": path})).await.unwrap();
+        assert_eq!(body, "alpha\nBETA\ngamma\n");
+
+        let err = e(json!({"path": path, "old_string": "nope", "new_string": "x"})).await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn edit_requires_replace_all_for_ambiguous_matches() {
+        let path = tmp_path("b");
+        let w = write_handler();
+        let e = edit_handler();
+        w(json!({"path": path, "content": "x x x"})).await.unwrap();
+
+        let err = e(json!({"path": path, "old_string": "x", "new_string": "Y"})).await.unwrap_err();
+        assert!(err.to_string().contains("appears 3 times"));
+
+        let r = read_handler();
+        assert_eq!(r(json!({"path": path})).await.unwrap(), "x x x");
+
+        e(json!({"path": path, "old_string": "x", "new_string": "Y", "replace_all": true})).await.unwrap();
+        assert_eq!(r(json!({"path": path})).await.unwrap(), "Y Y Y");
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+}
