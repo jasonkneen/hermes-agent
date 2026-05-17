@@ -5,12 +5,12 @@ use tokio::io::AsyncBufReadExt;
 use crate::types::Message;
 
 pub fn session_dir(id: &str) -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("hermes-core")
-        .join("sessions")
-        .join(id)
+    let base = std::env::var("HERMES_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".hermes")))
+        .unwrap_or_else(|| PathBuf::from(".hermes"));
+    base.join("sessions").join(id)
 }
 
 pub fn transcript_path(id: &str) -> PathBuf {

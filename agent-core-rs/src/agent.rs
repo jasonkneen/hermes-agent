@@ -10,6 +10,13 @@ pub struct AgentConfig<'a> {
     pub system: &'a str,
     pub max_iterations: usize,
     pub transcript: Option<&'a Path>,
+    pub quiet: bool,
+}
+
+impl<'a> Default for AgentConfig<'a> {
+    fn default() -> Self {
+        Self { system: "", max_iterations: 20, transcript: None, quiet: false }
+    }
 }
 
 pub async fn run(
@@ -27,6 +34,7 @@ pub async fn run(
 
     let specs = registry.specs();
     let mut final_text = String::new();
+    let quiet = cfg.quiet;
 
     for iter in 0..cfg.max_iterations {
         let turn = provider
@@ -34,14 +42,19 @@ pub async fn run(
                 cfg.system,
                 &history,
                 &specs,
-                Box::new(|delta: &str| {
+                Box::new(move |delta: &str| {
+                    if quiet {
+                        return;
+                    }
                     use std::io::Write;
                     let _ = std::io::stderr().write_all(delta.as_bytes());
                     let _ = std::io::stderr().flush();
                 }),
             )
             .await?;
-        eprintln!();
+        if !quiet {
+            eprintln!();
+        }
 
         let assistant = Message::Assistant { content: turn.blocks.clone() };
         history.push(assistant.clone());
@@ -57,9 +70,18 @@ pub async fn run(
         let mut results: Vec<Block> = Vec::new();
         for block in &turn.blocks {
             if let Block::ToolUse { id, name, input } = block {
-                eprintln!("→ {name}({})", compact(input));
+                if !quiet {
+                    eprintln!("→ {name}({})", compact(input));
+                }
                 let (out, is_error) = registry.dispatch(name, input.clone()).await;
-                eprintln!("← {} ({} bytes){}", name, out.len(), if is_error { " [error]" } else { "" });
+                if !quiet {
+                    eprintln!(
+                        "← {} ({} bytes){}",
+                        name,
+                        out.len(),
+                        if is_error { " [error]" } else { "" }
+                    );
+                }
                 results.push(Block::ToolResult {
                     tool_use_id: id.clone(),
                     content: out,
@@ -73,7 +95,7 @@ pub async fn run(
             session::append(path, &user_results).await?;
         }
 
-        if iter + 1 == cfg.max_iterations {
+        if iter + 1 == cfg.max_iterations && !quiet {
             eprintln!("(hit max_iterations={})", cfg.max_iterations);
         }
     }

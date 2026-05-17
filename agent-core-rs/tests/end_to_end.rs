@@ -131,7 +131,7 @@ async fn full_loop_with_tool_call_and_transcript() {
     tokio::fs::create_dir_all(&tmp_dir).await.unwrap();
     let transcript = tmp_dir.join("messages.jsonl");
 
-    let cfg = AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript) };
+    let cfg = AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript), quiet: true };
     let final_text = run(&provider, &registry, cfg, Vec::new(), "say hi").await.unwrap();
 
     assert_eq!(final_text, "pong received");
@@ -197,7 +197,7 @@ async fn session_resume_loads_prior_history() {
     run(
         &p1,
         &reg,
-        AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript) },
+        AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript), quiet: true },
         Vec::new(),
         "first turn",
     ).await.unwrap();
@@ -216,7 +216,7 @@ async fn session_resume_loads_prior_history() {
     let out = run(
         &p2,
         &reg,
-        AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript) },
+        AgentConfig { system: "", max_iterations: 5, transcript: Some(&transcript), quiet: true },
         history,
         "second turn",
     ).await.unwrap();
