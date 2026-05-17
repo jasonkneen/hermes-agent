@@ -1,0 +1,24 @@
+[package]
+name = "hermes-core"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal headless reimplementation of the hermes-agent core loop"
+
+[[bin]]
+name = "hermes-core"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+anyhow = "1"
+dirs = "5"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "z"
