@@ -111,7 +111,7 @@ pub async fn call(
     parse_stream(resp.bytes_stream().map(|r| r.map_err(anyhow::Error::from)), on_delta).await
 }
 
-pub async fn parse_stream<S>(mut stream: S, mut on_delta: StreamCb) -> Result<AssistantTurn>
+pub async fn parse_stream<S>(mut stream: S, on_delta: StreamCb) -> Result<AssistantTurn>
 where
     S: Stream<Item = Result<bytes::Bytes>> + Unpin,
 {
@@ -182,7 +182,7 @@ mod tests {
 
     fn run_parse(chunks: Vec<&'static [u8]>) -> AssistantTurn {
         let s = stream::iter(chunks.into_iter().map(|c| Ok(bytes::Bytes::from_static(c))));
-        let cb: StreamCb = Box::new(|_: &str| {});
+        let cb: StreamCb = std::sync::Arc::new(|_: &str| {});
         tokio::runtime::Runtime::new().unwrap().block_on(parse_stream(s, cb)).unwrap()
     }
 

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::provider::Provider;
+use crate::provider::{Provider, StreamCb};
 use crate::registry::Registry;
 use crate::session;
 use crate::types::{Block, Message};
@@ -19,12 +20,36 @@ impl<'a> Default for AgentConfig<'a> {
     }
 }
 
+/// Run the agent loop with the default stderr-streaming behavior (silenced
+/// when `cfg.quiet` is true). Use [`run_with_stream`] for a custom sink.
 pub async fn run(
+    provider: &Provider,
+    registry: &Registry,
+    cfg: AgentConfig<'_>,
+    history: Vec<Message>,
+    user_input: &str,
+) -> Result<String> {
+    let quiet = cfg.quiet;
+    let cb: StreamCb = Arc::new(move |delta: &str| {
+        if quiet {
+            return;
+        }
+        use std::io::Write;
+        let _ = std::io::stderr().write_all(delta.as_bytes());
+        let _ = std::io::stderr().flush();
+    });
+    run_with_stream(provider, registry, cfg, history, user_input, cb).await
+}
+
+/// Run the agent loop, forwarding each LLM text delta to `on_delta`.
+/// Tool traces still go to stderr unless `cfg.quiet` is set.
+pub async fn run_with_stream(
     provider: &Provider,
     registry: &Registry,
     cfg: AgentConfig<'_>,
     mut history: Vec<Message>,
     user_input: &str,
+    on_delta: StreamCb,
 ) -> Result<String> {
     let user_msg = Message::User { content: vec![Block::Text { text: user_input.to_string() }] };
     history.push(user_msg.clone());
@@ -37,21 +62,7 @@ pub async fn run(
     let quiet = cfg.quiet;
 
     for iter in 0..cfg.max_iterations {
-        let turn = provider
-            .call(
-                cfg.system,
-                &history,
-                &specs,
-                Box::new(move |delta: &str| {
-                    if quiet {
-                        return;
-                    }
-                    use std::io::Write;
-                    let _ = std::io::stderr().write_all(delta.as_bytes());
-                    let _ = std::io::stderr().flush();
-                }),
-            )
-            .await?;
+        let turn = provider.call(cfg.system, &history, &specs, on_delta.clone()).await?;
         if !quiet {
             eprintln!();
         }

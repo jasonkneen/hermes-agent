@@ -9,7 +9,7 @@ name = "hermes-core"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal", "sync", "net", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -17,6 +17,8 @@ futures-util = "0.3"
 anyhow = "1"
 dirs = "5"
 bytes = "1"
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio"] }
+tokio-stream = "0.1"
 
 [profile.release]
 lto = true

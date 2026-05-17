@@ -8,7 +8,7 @@ pub enum Provider {
     OpenAI { api_key: String, base_url: String, model: String },
 }
 
-pub type StreamCb = Box<dyn FnMut(&str) + Send>;
+pub type StreamCb = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 impl Provider {
     pub fn call<'a>(
