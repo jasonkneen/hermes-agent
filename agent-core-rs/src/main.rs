@@ -346,15 +346,67 @@ async fn start_gateway() -> Result<()> {
         .append(true)
         .open(&log_path)?;
     let log_err = log_file.try_clone()?;
-    let child = std::process::Command::new(exe)
-        .args(["gateway", "run"])
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["gateway", "run"])
         .stdin(std::process::Stdio::null())
         .stdout(log_file)
-        .stderr(log_err)
-        .spawn()?;
+        .stderr(log_err);
+
+    // Properly detach from the controlling terminal so SIGHUP on parent
+    // shell exit doesn't kill us. setsid() makes the child a session leader
+    // in a new process group with no controlling tty.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc_setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn()?;
     let pid = child.id();
+
+    // Wait briefly for the daemon to come up so we can fail loudly if it
+    // died immediately (port in use, bad config, etc).
+    let bind = "127.0.0.1:8642";
+    let mut alive = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if reqwest::Client::new()
+            .get(format!("http://{bind}/health"))
+            .timeout(std::time::Duration::from_millis(200))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+        {
+            alive = true;
+            break;
+        }
+    }
+    if !alive {
+        // Surface the log tail so the user sees the actual error.
+        let tail = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let tail = tail.lines().rev().take(20).collect::<Vec<_>>();
+        let tail: Vec<_> = tail.into_iter().rev().collect();
+        return Err(anyhow!(
+            "gateway failed to come up within 2s. Last log lines:\n{}\n(full log: {})",
+            tail.join("\n"),
+            log_path.display()
+        ));
+    }
     eprintln!("started gateway (pid {pid}), logs at {}", log_path.display());
     Ok(())
+}
+
+#[cfg(unix)]
+unsafe fn libc_setsid() -> i32 {
+    extern "C" {
+        fn setsid() -> i32;
+    }
+    setsid()
 }
 
 fn stop_gateway() -> Result<()> {
